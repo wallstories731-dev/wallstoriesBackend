@@ -179,6 +179,8 @@ public class OrderRepository {
                     o.ordered_at,
                     o.tracking_number,
                     o.shipping_provider,
+                    TRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, ''))) AS customer_name,
+                    u.email AS customer_email,
 
                     oi.order_item_id,
                     oi.product_id,
@@ -191,14 +193,14 @@ public class OrderRepository {
                         WHERE pi.product_id = p.product_id AND pi.is_primary = true
                         LIMIT 1) AS image_url
 
-                FROM orders o
-
+                FROM (SELECT * FROM orders ORDER BY ordered_at DESC LIMIT ? OFFSET ?) o
+                LEFT JOIN users u
+                ON o.user_id = u.user_id
                 LEFT JOIN order_items oi
                 ON o.order_id = oi.order_id
                 LEFT JOIN products p
                 ON oi.product_id = p.product_id
                 ORDER BY o.ordered_at DESC
-                LIMIT ? OFFSET ?
                 """;
 
         Map<UUID, Order> orderMap = new LinkedHashMap<>();
@@ -224,6 +226,8 @@ public class OrderRepository {
                     order.setorderedAt(rs.getTimestamp("ordered_at"));
                     order.setTrackingNumber(rs.getString("tracking_number"));
                     order.setShippingProvider(rs.getString("shipping_provider"));
+                    order.setCustomerName(rs.getString("customer_name"));
+                    order.setCustomerEmail(rs.getString("customer_email"));
                     order.setOrderItems(new ArrayList<>());
                     orderMap.put(orderId, order);
                 }

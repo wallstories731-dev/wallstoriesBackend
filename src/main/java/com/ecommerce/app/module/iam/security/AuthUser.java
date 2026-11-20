@@ -76,6 +76,18 @@ public class AuthUser {
         this.roles = roles;
     }
 
+    /** Best-effort: true when the request carries a valid Admin bearer token. */
+    public static boolean isAdminRequest(jakarta.servlet.http.HttpServletRequest request) {
+        try {
+            String header = request.getHeader("Authorization");
+            if (header == null || !header.startsWith("Bearer ")) return false;
+            AuthUser user = getAuthUser(header.substring(7).trim());
+            return user != null && user.hasRole("Admin");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public static AuthUser getAuthUser(String token){
         JwtUtil jwt = new JwtUtil();
         AuthUser authUser = new AuthUser();

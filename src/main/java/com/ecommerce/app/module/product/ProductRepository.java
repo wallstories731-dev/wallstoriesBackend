@@ -27,9 +27,10 @@ public class ProductRepository {
                     ingredients_tamil,
                     price,
                     stock_quantity,
-                    is_active
+                    is_active,
+                    attributes
                 )
-                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                 """;
 
         try (Connection connection = DBConfig.getConnection();
@@ -48,6 +49,7 @@ public class ProductRepository {
             ps.setDouble(9, product.getPrice());
             ps.setInt(10, product.getStockQuantity());
             ps.setBoolean(11, product.isActive());
+            ps.setString(12, emptyToNull(product.getAttributes()));
 
             ps.executeUpdate();
 
@@ -65,6 +67,26 @@ public class ProductRepository {
     }
 
     // Find product by id
+    /** Batch lookup used by checkout to avoid one query per cart line. */
+    public Map<UUID, Product> findByIds(Collection<UUID> ids) {
+        Map<UUID, Product> out = new HashMap<>();
+        if (ids == null || ids.isEmpty()) return out;
+        String sql = "SELECT * FROM products WHERE product_id = ANY(?)";
+        try (Connection connection = DBConfig.getConnection();
+             PreparedStatement ps = connection.prepareStatement(sql)) {
+            ps.setArray(1, connection.createArrayOf("uuid", ids.toArray()));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Product p = mapRow(rs);
+                    out.put(p.getId(), p);
+                }
+            }
+        } catch (SQLException e) {
+            LOG.error("sql exception at findByIds ", e);
+        }
+        return out;
+    }
+
     public Product findById(UUID productId) {
 
         String sql = """
@@ -139,7 +161,7 @@ public class ProductRepository {
         String sql = """
                 SELECT p.product_id, p.name, p.description, p.category,
                        p.ingredients, p.name_tamil, p.description_tamil,
-                       p.ingredients_tamil,
+                       p.ingredients_tamil, p.attributes,
                        p.price, p.stock_quantity, p.is_active,
                        p.created_at, p.updated_at,
                        pi.image_url AS primary_image_url,
@@ -194,7 +216,7 @@ public class ProductRepository {
         String sql = """
                 SELECT p.product_id, p.name, p.description, p.category,
                        p.ingredients, p.name_tamil, p.description_tamil,
-                       p.ingredients_tamil,
+                       p.ingredients_tamil, p.attributes,
                        p.price, p.stock_quantity, p.is_active,
                        p.created_at, p.updated_at,
                        pi.image_url AS primary_image_url,
@@ -287,7 +309,7 @@ public class ProductRepository {
         String sql =
                 "SELECT p.product_id, p.name, p.description, p.category, "
               + "       p.ingredients, p.name_tamil, p.description_tamil, "
-              + "       p.ingredients_tamil, "
+              + "       p.ingredients_tamil, p.attributes, "
               + "       p.price, p.stock_quantity, p.is_active, "
               + "       p.created_at, p.updated_at, "
               + "       pi.image_url AS primary_image_url, "
@@ -391,7 +413,8 @@ public class ProductRepository {
                     ingredients_tamil = ?,
                     price = ?,
                     stock_quantity = ?,
-                    is_active = ?
+                    is_active = ?,
+                    attributes = COALESCE(?, attributes)
                 WHERE product_id = ?
                 """;
 
@@ -408,7 +431,8 @@ public class ProductRepository {
             ps.setDouble(8, product.getPrice());
             ps.setInt(9, product.getStockQuantity());
             ps.setBoolean(10, product.isActive());
-            ps.setObject(11, product.getId());
+            ps.setString(11, emptyToNull(product.getAttributes()));
+            ps.setObject(12, product.getId());
 
             int rows = ps.executeUpdate();
 
@@ -727,6 +751,32 @@ public class ProductRepository {
             int limit,
             int offset
     ) {
+        return search(q, categories, null, minPrice, maxPrice, inStock, sort, limit, offset);
+    }
+
+    /**
+     * Overload that additionally restricts the result set to a given
+     * list of product UUIDs — used to combine tag filtering (done in
+     * {@link TagRepository#findActiveProductIdsByTagSlugs}) with the
+     * generic keyword/price/category search without duplicating all this
+     * SQL. Passing {@code null} for {@code tagFilterIds} skips the
+     * restriction; passing an empty list deliberately matches nothing.
+     */
+    public List<Product> search(
+            String q,
+            List<String> categories,
+            List<java.util.UUID> tagFilterIds,
+            Double minPrice,
+            Double maxPrice,
+            boolean inStock,
+            String sort,
+            int limit,
+            int offset
+    ) {
+
+        if (tagFilterIds != null && tagFilterIds.isEmpty()) {
+            return new ArrayList<>();
+        }
 
         StringBuilder sql = new StringBuilder(
                 "SELECT * FROM products WHERE is_active = true"
@@ -762,9 +812,14 @@ public class ProductRepository {
                .append(TSV).append(" @@ websearch_to_tsquery('english', ?) ")
                .append(" OR name ILIKE ? ")
                .append(" OR ingredients ILIKE ? ")
+               .append(" OR product_id IN (SELECT pt.product_id FROM product_tags pt")
+               .append("   JOIN tags t ON t.tag_id = pt.tag_id")
+               .append("   WHERE t.name ILIKE ? OR t.slug ILIKE ?)")
                .append(")");
             params.add(tsQuery);
             params.add(prefixLike);
+            params.add(substrLike);
+            params.add(substrLike);
             params.add(substrLike);
         }
         // Categories: zero -> no filter; one or more -> OR-combined ILIKE.
@@ -798,6 +853,16 @@ public class ProductRepository {
 
         if (inStock) {
             sql.append(" AND stock_quantity > 0");
+        }
+
+        // Tag restriction via precomputed id set (see TagRepository). We
+        // keep the join resolution out of this query so it stays simple
+        // and so a product matching multiple tags isn't duplicated.
+        if (tagFilterIds != null) {
+            sql.append(" AND product_id = ANY(?)");
+            // Bind the UUID[] via a marker; actual array creation happens
+            // below when we have a Connection handle.
+            params.add(new TagIdArrayMarker(tagFilterIds));
         }
 
         // ORDER BY
@@ -836,7 +901,13 @@ public class ProductRepository {
              PreparedStatement ps = connection.prepareStatement(sql.toString())) {
 
             for (int i = 0; i < params.size(); i++) {
-                ps.setObject(i + 1, params.get(i));
+                Object param = params.get(i);
+                if (param instanceof TagIdArrayMarker marker) {
+                    ps.setArray(i + 1,
+                            connection.createArrayOf("uuid", marker.ids().toArray()));
+                } else {
+                    ps.setObject(i + 1, param);
+                }
             }
 
             ResultSet rs = ps.executeQuery();
@@ -852,6 +923,9 @@ public class ProductRepository {
 
         return products;
     }
+
+    /** Marker so the search() param list can carry a UUID[] until a Connection exists. */
+    private record TagIdArrayMarker(List<java.util.UUID> ids) {}
 
     // ------------------------------------------------------------------
     // Recommendation: other active products in the same category, excluding
@@ -921,6 +995,31 @@ public class ProductRepository {
             LOG.error("unhandled exception at findDistinctCategories ", e);
         }
         return categories;
+    }
+
+    /** Distinct tags (stored inside products.attributes JSON) of active products, with usage counts. */
+    public Map<String, Integer> findTagCounts() {
+        String sql = """
+                SELECT t.tag, COUNT(*) AS n
+                FROM products p
+                CROSS JOIN LATERAL jsonb_array_elements_text(
+                    CASE WHEN p.attributes ~ '^\\s*\\{' AND jsonb_typeof(p.attributes::jsonb -> 'tags') = 'array'
+                         THEN p.attributes::jsonb -> 'tags' ELSE '[]'::jsonb END) AS t(tag)
+                WHERE p.is_active = true AND TRIM(t.tag) <> ''
+                GROUP BY t.tag
+                ORDER BY n DESC, t.tag
+                """;
+        Map<String, Integer> tags = new LinkedHashMap<>();
+        try (Connection connection = DBConfig.getConnection();
+                PreparedStatement ps = connection.prepareStatement(sql);
+                ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                tags.put(rs.getString("tag"), rs.getInt("n"));
+            }
+        } catch (Exception e) {
+            LOG.error("exception at findTagCounts ", e);
+        }
+        return tags;
     }
 
     // ------------------------------------------------------------------
@@ -996,6 +1095,8 @@ public class ProductRepository {
         product.setNameTamil(getStringIfPresent(rs, "name_tamil"));
         product.setDescriptionTamil(getStringIfPresent(rs, "description_tamil"));
         product.setIngredientsTamil(getStringIfPresent(rs, "ingredients_tamil"));
+
+        product.setAttributes(getStringIfPresent(rs, "attributes"));
 
         product.setPrice(rs.getDouble("price"));
 

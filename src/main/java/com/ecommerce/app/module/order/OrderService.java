@@ -64,12 +64,24 @@ public class OrderService {
                 return null;
             }
             order.setOrderId(created.getOrderId());
+            java.util.Set<UUID> productIds = new java.util.HashSet<>();
+            java.util.Set<UUID> variantIds = new java.util.HashSet<>();
+            for (OrderItem it : order.getOrderItems()) {
+                productIds.add(it.getProductId());
+                if (it.getVariantId() != null) variantIds.add(it.getVariantId());
+            }
+            java.util.Map<UUID, Product> productsById = productRepository.findByIds(productIds);
+            java.util.Map<UUID, ProductVariant> variantsById = productVariantRepository.findByIds(variantIds);
             for (OrderItem item : order.getOrderItems()) {
                 // inventory check
                 LOG.info("{}", (Object) created.getOrderId()+"order id set for item"+item.getProductId());
 
                 item.setOrderId(created.getOrderId());
-                Product product = productRepository.findById(item.getProductId());
+                Product product = productsById.get(item.getProductId());
+                if (product == null) {
+                    connection.rollback();
+                    throw new RuntimeException("product not available");
+                }
                 // If the caller supplied a variantId on the order item, that
                 // variant's price/stock are authoritative; otherwise fall
                 // back to the product-level price/stock.
@@ -77,7 +89,7 @@ public class OrderService {
                 double linePrice = product.getPrice();
                 int availableStock = product.getStockQuantity();
                 if (item.getVariantId() != null) {
-                    variant = productVariantRepository.findById(item.getVariantId());
+                    variant = variantsById.get(item.getVariantId());
                     if (variant == null || !variant.isActive()
                             || !variant.getProductId().equals(product.getId())) {
                         connection.rollback();
@@ -297,8 +309,16 @@ public class OrderService {
             // 2. validate stock & create order_items using live product price
             double total = 0.0;
             int totalGrams = 0;
+            java.util.Set<UUID> cartProductIds = new java.util.HashSet<>();
+            java.util.Set<UUID> cartVariantIds = new java.util.HashSet<>();
             for (CartItem ci : cartItems) {
-                Product product = productRepository.findById(ci.getProductId());
+                cartProductIds.add(ci.getProductId());
+                if (ci.getVariantId() != null) cartVariantIds.add(ci.getVariantId());
+            }
+            java.util.Map<UUID, Product> cartProducts = productRepository.findByIds(cartProductIds);
+            java.util.Map<UUID, ProductVariant> cartVariants = productVariantRepository.findByIds(cartVariantIds);
+            for (CartItem ci : cartItems) {
+                Product product = cartProducts.get(ci.getProductId());
                 if (product == null || product.getId() == null) {
                     connection.rollback();
                     throw new RuntimeException("product no longer available");
@@ -317,7 +337,7 @@ public class OrderService {
                 int availableStock = product.getStockQuantity();
                 String variantLabel = null;
                 if (ci.getVariantId() != null) {
-                    variant = productVariantRepository.findById(ci.getVariantId());
+                    variant = cartVariants.get(ci.getVariantId());
                     if (variant == null || !variant.isActive()
                             || !variant.getProductId().equals(product.getId())) {
                         connection.rollback();

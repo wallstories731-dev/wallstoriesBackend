@@ -56,7 +56,7 @@ import jakarta.servlet.http.HttpServlet;
  * <p>Configuration via env vars:</p>
  * <ul>
  *   <li>{@code PORT}                 — HTTP port (default 8080)</li>
- *   <li>{@code CONTEXT_PATH}         — webapp context path (default "/arusuvai")</li>
+ *   <li>{@code CONTEXT_PATH}         — webapp context path (default "/wallstories")</li>
  *   <li>{@code CORS_ALLOWED_ORIGINS} — comma-separated list, or "*". When unset,
  *       a safe default is derived from APP_HOME_URL/APP_BASE_URL + localhost dev
  *       origins (no longer "*").</li>
@@ -76,8 +76,19 @@ public final class Main {
     }
 
     public static void main(String[] args) throws Exception {
+        // Do not open the HTTP listener or start indexers against an uninitialized DB.
+        try {
+            try (java.sql.Connection connection = com.ecommerce.app.config.DBConfig.getConnection()) {
+                com.ecommerce.app.config.DatabaseSchemaValidator.validate(connection);
+            }
+            com.ecommerce.app.module.order.FixVariantMigration.run();
+        } catch (Exception e) {
+            com.ecommerce.app.config.DBConfig.shutdown();
+            throw new IllegalStateException("Database initialization failed: " + e.getMessage(), e);
+        }
+
         int port = parsePort(System.getenv("PORT"), 8080);
-        String contextPath = envOrDefault("CONTEXT_PATH", "/arusuvai");
+        String contextPath = envOrDefault("CONTEXT_PATH", "/wallstories");
 
         // Tomcat needs a writable scratch directory.
         File baseDir = Files.createTempDirectory("arusuvai-tomcat").toFile();
@@ -105,16 +116,12 @@ public final class Main {
         LOG.info("APP_BASE_URL  = {}", com.ecommerce.app.module.iam.config.ENVConfig.get("APP_BASE_URL"));
         LOG.info("APP_HOME_URL  = {}", com.ecommerce.app.module.iam.config.ENVConfig.get("APP_HOME_URL"));
 
-        // One-time migration: backfill variant_label on legacy order_items
-        com.ecommerce.app.module.order.FixVariantMigration.run();
-
         // Best-effort Elasticsearch bootstrap: create the index + alias
         // and seed it from Postgres. Runs in the background so a missing
         // ES instance never blocks startup; search falls back to PG.
         Thread esBoot = new Thread(() -> {
             try {
                 ProductSearchIndexer indexer = new ProductSearchIndexer();
-                indexer.ensureIndex();
                 int n = indexer.reindexAll();
                 if (n > 0) LOG.info("ES warm-up: indexed {} products on startup", n);
             } catch (Exception e) {
@@ -205,6 +212,8 @@ public final class Main {
         addOrigin(origins, com.ecommerce.app.module.iam.config.ENVConfig.get("APP_BASE_URL"));
         origins.add("http://localhost:5173");
         origins.add("http://localhost:3000");
+        origins.add("http://localhost:8443");
+        origins.add("http://127.0.0.1:8443");
         return String.join(",", origins);
     }
 
@@ -246,6 +255,8 @@ public final class Main {
         mount(ctx, new ProductVariantController(), "/api/product/variant");
         mount(ctx, new ProductImageController(), "/api/product/image");
         mount(ctx, new CategoryController(), "/api/category");
+        mount(ctx, new com.ecommerce.app.module.product.TagController(), "/api/tag");
+        mount(ctx, new com.ecommerce.app.module.settings.SettingsController(), "/api/settings");
         mount(ctx, new CartController(), "/api/cart");
         mount(ctx, new WishlistController(), "/api/wishlist");
         mount(ctx, new OrderController(), "/api/order");

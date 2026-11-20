@@ -95,7 +95,6 @@ public class DelhiveryClient {
 
         String url = baseUrl + "/c/api/pin-codes/json/?filter_codes=" + destinationPin;
         LOG.info("[DELHIVERY-CHECK] GET {}", url);
-        LOG.info("[DELHIVERY-CHECK] Auth header: Token {}...", token.substring(0, Math.min(6, token.length())));
         HttpRequest req = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .header("Authorization", "Token " + token)
@@ -125,7 +124,7 @@ public class DelhiveryClient {
         int estimatedDays = postal.path("max_days").asInt(7);
         String district = postal.path("district").asText(null);
 
-        return new ServiceabilityResult(true, cod, estimatedDays, district);
+        return new ServiceabilityResult(prepaid, cod, estimatedDays, district);
     }
 
     // ------------------------------------------------------------------
@@ -148,7 +147,6 @@ public class DelhiveryClient {
                 + "&cod=0";
 
         LOG.info("[DELHIVERY-RATE] GET {}", url);
-        LOG.info("[DELHIVERY-RATE] Auth header: Token {}...", token.substring(0, Math.min(6, token.length())));
         HttpRequest req = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .header("Authorization", "Token " + token)
@@ -167,7 +165,11 @@ public class DelhiveryClient {
         JsonNode root = MAPPER.readTree(res.body());
         // Response is an array; first element has the charges
         JsonNode charges = root.isArray() ? root.get(0) : root;
-        double totalAmount = charges.path("total_amount").asDouble(0);
+        double totalAmount = charges == null ? 0 : charges.path("total_amount").asDouble(0);
+        // A missing/zero charge would otherwise become free shipping instead of using the fallback rates.
+        if (totalAmount <= 0) {
+            throw new RuntimeException("Delhivery returned no charge for pin " + destinationPin + ": " + res.body());
+        }
         String zone = charges.path("zone").asText("unknown");
         double chargedWeight = charges.path("charged_weight").asDouble(weightGrams);
 

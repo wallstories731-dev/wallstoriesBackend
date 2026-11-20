@@ -2,7 +2,6 @@ package com.ecommerce.app.module.product;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import com.ecommerce.app.module.product.image.MinIOStorageService;
 import com.ecommerce.app.module.product.image.StorageFactory;
 import com.ecommerce.app.module.product.image.StorageService;
 import com.ecommerce.app.module.review.ReviewRepository;
@@ -18,6 +17,7 @@ public class ProductService {
     ProductRepository productRepository = new ProductRepository();
     ProductImageRepository productImageRepository = new ProductImageRepository();
     ProductVariantRepository productVariantRepository = new ProductVariantRepository();
+    TagRepository tagRepository = new TagRepository();
     ReviewRepository reviewRepository = new ReviewRepository();
     StorageService storageService = StorageFactory.get();
     // ES indexer is best-effort: every call inside it is try/catched so
@@ -128,6 +128,41 @@ public class ProductService {
         return products;
     }
 
+    /**
+     * Like {@link #getAllActiveProducts} but with images and variants attached
+     * in two batched queries. Bypasses the list cache so the (mutable) cached
+     * Product objects are never modified.
+     */
+    public List<Product> getAllActiveProductsExpanded(int limit, int offset) {
+        return expand(productRepository.findAllListViewActive(limit, offset), false);
+    }
+
+    /** Admin catalog (drafts included) with images and every variant. */
+    public List<Product> getAllProductsExpanded(int limit, int offset) {
+        return expand(productRepository.findAllListView(limit, offset), true);
+    }
+
+    private List<Product> expand(List<Product> products, boolean includeInactiveVariants) {
+        List<UUID> ids = new ArrayList<>();
+        for (Product p : products) if (p.getId() != null) ids.add(p.getId());
+        Map<UUID, List<ProductImage>> images = productImageRepository.findByProductIds(ids);
+        Map<UUID, List<ProductVariant>> variants =
+                productVariantRepository.findByProductIds(ids, includeInactiveVariants);
+        // Batch-fetch tags so the list view returns productTags without an
+        // N+1. See TagRepository.findByProductIds for the single SQL used.
+        Map<UUID, List<Tag>> tags = tagRepository.findByProductIds(ids);
+        for (Product p : products) {
+            List<ProductImage> imgs = images.getOrDefault(p.getId(), new ArrayList<>());
+            p.setImages(imgs);
+            for (ProductImage img : imgs) {
+                if (img.isPrimary()) { p.setPrimaryImageUrl(img.getImageUrl()); break; }
+            }
+            p.setVariants(variants.getOrDefault(p.getId(), new ArrayList<>()));
+            p.setProductTags(tags.getOrDefault(p.getId(), new ArrayList<>()));
+        }
+        return products;
+    }
+
     // Get product with images
     public Product getProductById(UUID productId) {
         Product product = productRepository.findById(productId);
@@ -155,6 +190,9 @@ public class ProductService {
         // Empty list when the product has no variants - the storefront
         // then falls back to product.price + product.stockQuantity.
         product.setVariants(productVariantRepository.findByProductId(productId));
+        // Hydrate tags attached via the product_tags join table so the
+        // detail view can render them without a second /api/tag call.
+        product.setProductTags(tagRepository.findByProductId(productId));
         return product;
     }
 
@@ -235,6 +273,25 @@ public class ProductService {
         }
     }
 
+    /** Registers an already-hosted https image (no upload). Used for seeded/external artwork. */
+    public ProductImage addExternalImage(UUID productId, String url) {
+        if (url == null || !url.startsWith("https://") || url.length() > 2048) return null;
+        if (productRepository.findById(productId) == null) return null;
+        try {
+            ProductImage img = new ProductImage();
+            img.setProductId(productId);
+            img.setObjectKey("external/" + UUID.randomUUID());
+            img.setImageUrl(url);
+            img.setPrimary(productImageRepository.findByProductId(productId).isEmpty());
+            ProductImage saved = productImageRepository.create(img);
+            invalidateListCache();
+            return saved;
+        } catch (Exception e) {
+            LOG.error("addExternalImage failed", e);
+            return null;
+        }
+    }
+
     public boolean deleteImage(UUID imageId) {
         ProductImage img = productImageRepository.findById(imageId);
         if (img == null) return false;
@@ -278,6 +335,10 @@ public class ProductService {
     // hydrates each product with its images. Filters/sort are all optional;
     // see ProductRepository.search for the contract.
     // ------------------------------------------------------------------
+    public java.util.Map<String, Integer> getTagCounts() {
+        return productRepository.findTagCounts();
+    }
+
     public List<String> getDistinctCategories() {
         return productRepository.findDistinctCategories();
     }
@@ -318,8 +379,34 @@ public class ProductService {
             int limit,
             int offset
     ) {
+        return searchProducts(q, categories, null, minPrice, maxPrice, inStock, sort, limit, offset);
+    }
+
+    /**
+     * Search with an optional {@code tags} filter (slugs, OR-combined). If
+     * the tag filter matches zero products, returns an empty list early
+     * without hitting the main products table.
+     */
+    public List<Product> searchProducts(
+            String q,
+            List<String> categories,
+            List<String> tagSlugs,
+            Double minPrice,
+            Double maxPrice,
+            boolean inStock,
+            String sort,
+            int limit,
+            int offset
+    ) {
+        List<UUID> tagFilterIds = null;
+        if (tagSlugs != null && !tagSlugs.isEmpty()) {
+            tagFilterIds = tagRepository.findActiveProductIdsByTagSlugs(tagSlugs);
+            if (tagFilterIds.isEmpty()) {
+                return new ArrayList<>();
+            }
+        }
         List<Product> products = productRepository.search(
-                q, categories, minPrice, maxPrice, inStock, sort, limit, offset);
+                q, categories, tagFilterIds, minPrice, maxPrice, inStock, sort, limit, offset);
         if (products.isEmpty()) {
             return products;
         }
@@ -332,11 +419,13 @@ public class ProductService {
         }
         Map<UUID, String> primaryUrls = productImageRepository.findPrimaryUrlsByProductIds(ids);
         Map<UUID, ReviewSummary> summaries = reviewRepository.summariesForProducts(ids);
+        Map<UUID, List<Tag>> tagsByProduct = tagRepository.findByProductIds(ids);
         for (Product p : products) {
             p.setPrimaryImageUrl(primaryUrls.get(p.getId()));
             ReviewSummary s = summaries.getOrDefault(p.getId(), new ReviewSummary(0.0, 0));
             p.setAverageRating(s.getAverageRating());
             p.setReviewCount(s.getReviewCount());
+            p.setProductTags(tagsByProduct.getOrDefault(p.getId(), new ArrayList<>()));
         }
         return products;
     }

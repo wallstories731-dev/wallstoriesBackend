@@ -117,7 +117,7 @@ public final class MailService {
                     .build();
             this.session = null;
             this.executor = Executors.newFixedThreadPool(2, new MailThreadFactory());
-            LOG.info("MailService enabled via ZeptoMail HTTP API (url={}, from={})", this.zeptoUrl, this.fromAddress);
+            LOG.info("MailService enabled via ZeptoMail HTTP API (url={})", this.zeptoUrl);
             return;
         }
 
@@ -166,7 +166,7 @@ public final class MailService {
         this.fromAddress = isBlank(configuredFrom) ? user : configuredFrom;
         this.http = null; this.zeptoUrl = null; this.zeptoAuthHeader = null;
         this.executor = Executors.newFixedThreadPool(2, new MailThreadFactory());
-        LOG.info("MailService enabled via SMTP (host={}, port={}, from={})", host, port, this.fromAddress);
+        LOG.info("MailService enabled via SMTP (host={}, port={})", host, port);
     }
 
     /** Returns true when a mail transport is configured. */

@@ -26,6 +26,10 @@ public class ProductImage {
     public void setImageUrl(String imageUrl) {
         this.imageUrl = imageUrl;
     }
+    @com.fasterxml.jackson.annotation.JsonProperty(value = "url", access = com.fasterxml.jackson.annotation.JsonProperty.Access.READ_ONLY)
+    public String getUrl() {
+        return imageUrl;
+    }
     public String getObjectKey() {
         return objectKey;
     }

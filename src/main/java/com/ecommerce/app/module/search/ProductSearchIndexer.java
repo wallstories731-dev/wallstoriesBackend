@@ -53,10 +53,10 @@ public final class ProductSearchIndexer {
 
     // ----- bootstrap --------------------------------------------------------
 
-    /** Idempotently create the index + alias. Safe to call on every startup. */
-    public void ensureIndex() {
+    /** Idempotently create the index + alias. Returns false when ES is unavailable. */
+    public boolean ensureIndex() {
         ElasticsearchClient es = ElasticsearchConfig.client();
-        if (es == null) return;
+        if (es == null) return false;
         try {
             boolean exists = es.indices().exists(b -> b.index(INDEX)).value();
             if (!exists) {
@@ -68,8 +68,10 @@ public final class ProductSearchIndexer {
                 es.indices().putAlias(b -> b.index(INDEX).name(ALIAS));
                 LOG.info("Pointed alias {} -> {}", ALIAS, INDEX);
             }
+            return true;
         } catch (Exception e) {
-            LOG.warn("ensureIndex failed: {}", e.getMessage());
+            LOG.warn("ensureIndex failed; skipping reindex (search falls back to Postgres): {}", e.getMessage());
+            return false;
         }
     }
 
@@ -196,7 +198,7 @@ public final class ProductSearchIndexer {
     public int reindexAll() {
         ElasticsearchClient es = ElasticsearchConfig.client();
         if (es == null) return 0;
-        ensureIndex();
+        if (!ensureIndex()) return 0;
         int total = 0;
         int pageSize = 200;
         int offset = 0;

@@ -136,7 +136,7 @@ public class AdminShippingController extends HttpServlet {
             int qty = (int) item.get("quantity");
             int itemWeight = variantWeightGrams(variantLabel) * qty;
             calculatedWeight += itemWeight;
-            LOG.info("[SHIP]   - {} (variant: {}) × {} = {}g", productName, variantLabel, qty, itemWeight);
+            LOG.info("[SHIP]   - {} (variant: {}) × {} = {}g", com.ecommerce.app.util.LogSafe.clean(productName), com.ecommerce.app.util.LogSafe.clean(variantLabel), qty, itemWeight);
         }
         if (calculatedWeight == 0) {
             LOG.warn("[SHIP] Cannot calculate weight - order items missing variant labels");
@@ -203,7 +203,7 @@ public class AdminShippingController extends HttpServlet {
         int weight = weightOverride > 0 ? weightOverride : calculatedWeight;
         LOG.info("[SHIP] Final weight for Delhivery: {}g (source: {})", weight,
                 weightOverride > 0 ? "frontend override" : "server calculated");
-        LOG.info("[SHIP] Destination: {} pin={} city={} state={} street={}", customerName, pincode, city, state, streetAddress);
+        LOG.info("[SHIP] Destination pin={} state={}", com.ecommerce.app.util.LogSafe.clean(pincode), com.ecommerce.app.util.LogSafe.clean(state));
 
         ShipmentRequest shipReq = new ShipmentRequest(
                 customerName,

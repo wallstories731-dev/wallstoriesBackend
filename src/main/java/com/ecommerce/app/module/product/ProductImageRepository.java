@@ -82,6 +82,30 @@ public class ProductImageRepository {
         return images;
     }
 
+    /** All images for many products in one query (primary first), keyed by product id. */
+    public Map<UUID, List<ProductImage>> findByProductIds(Collection<UUID> productIds) {
+        Map<UUID, List<ProductImage>> result = new HashMap<>();
+        if (productIds == null || productIds.isEmpty()) {
+            return result;
+        }
+        String sql = "SELECT * FROM product_images WHERE product_id = ANY(?) "
+                + "ORDER BY is_primary DESC, created_at";
+        try (
+                Connection connection = DBConfig.getConnection();
+                PreparedStatement ps = connection.prepareStatement(sql)
+        ) {
+            ps.setArray(1, connection.createArrayOf("uuid", productIds.toArray()));
+            ResultSet rs = ps.executeQuery();
+            while (rs.next()) {
+                ProductImage img = mapRow(rs);
+                result.computeIfAbsent(img.getProductId(), k -> new ArrayList<>()).add(img);
+            }
+        } catch (Exception e) {
+            LOG.error("exception at findByProductIds ", e);
+        }
+        return result;
+    }
+
     // Find primary image
     public ProductImage findPrimaryImage(UUID productId) {
 

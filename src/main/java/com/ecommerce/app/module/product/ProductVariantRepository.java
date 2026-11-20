@@ -9,6 +9,9 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.List;
 import java.util.UUID;
 
@@ -53,6 +56,58 @@ public class ProductVariantRepository {
             }
         } catch (SQLException e) {
             LOG.error("sql exception at findByProductId variant ", e);
+        }
+        return out;
+    }
+
+    public java.util.Map<UUID, List<ProductVariant>> findByProductIds(
+            java.util.Collection<UUID> productIds, boolean includeInactive) {
+        java.util.Map<UUID, List<ProductVariant>> out = new java.util.HashMap<>();
+        if (productIds == null || productIds.isEmpty()) return out;
+        String sql = """
+                SELECT variant_id, product_id, label, price, stock_quantity,
+                       is_active, sort_order, created_at, updated_at
+                FROM product_variants
+                WHERE product_id = ANY(?)
+                """
+                + (includeInactive ? "" : " AND is_active = true ")
+                + " ORDER BY sort_order, label";
+        try (Connection c = DBConfig.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setArray(1, c.createArrayOf("uuid", productIds.toArray()));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    ProductVariant v = mapRow(rs);
+                    out.computeIfAbsent(v.getProductId(), k -> new ArrayList<>()).add(v);
+                }
+            }
+        } catch (SQLException e) {
+            LOG.error("sql exception at findByProductIds variant ", e);
+        }
+        return out;
+    }
+
+    /** Batch lookup used by checkout to avoid one query per cart line. */
+    public Map<UUID, ProductVariant> findByIds(Collection<UUID> ids) {
+        Map<UUID, ProductVariant> out = new HashMap<>();
+        if (ids == null || ids.isEmpty()) return out;
+        String sql = """
+                SELECT variant_id, product_id, label, price, stock_quantity,
+                       is_active, sort_order, created_at, updated_at
+                FROM product_variants
+                WHERE variant_id = ANY(?)
+                """;
+        try (Connection c = DBConfig.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setArray(1, c.createArrayOf("uuid", ids.toArray()));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    ProductVariant v = mapRow(rs);
+                    out.put(v.getVariantId(), v);
+                }
+            }
+        } catch (SQLException e) {
+            LOG.error("sql exception at findByIds variant ", e);
         }
         return out;
     }

@@ -18,7 +18,7 @@ public class AuthorizationFilter implements Filter {
     // Endpoints under these prefixes are accessible without a JWT.
     // Everything else requires a valid bearer token; role/permission checks
     // are then enforced by @RequiresRole / @RequiresPermission annotations.
-    public static final String[] public_path = { "/auth" };
+    private static final String[] public_path = { "/auth" };
 
     public void doFilter(ServletRequest req, ServletResponse res, FilterChain chain)
             throws IOException, ServletException {
@@ -49,13 +49,19 @@ public class AuthorizationFilter implements Filter {
             return;
         }
         // Distinct category list powering the storefront filter sidebar.
-        if ("GET".equalsIgnoreCase(httpMethod) && path != null && path.startsWith("/api/category")) {
+        if ("GET".equalsIgnoreCase(httpMethod) && path != null && (path.startsWith("/api/category") || path.startsWith("/api/tag"))) {
+            chain.doFilter(request, response);
+            return;
+        }
+        // Public storefront settings read; PUT checks the Admin role in the controller.
+        if ("GET".equalsIgnoreCase(httpMethod) && "/api/settings".equals(path)) {
             chain.doFilter(request, response);
             return;
         }
         // Public review browsing: GET /api/review?productId=<uuid> is open.
         // Submitting/deleting reviews still requires a Bearer token.
-        if ("GET".equalsIgnoreCase(httpMethod) && path != null && path.startsWith("/api/review")) {
+        if ("GET".equalsIgnoreCase(httpMethod) && path != null && path.startsWith("/api/review")
+                && !"true".equalsIgnoreCase(request.getParameter("all"))) {
             chain.doFilter(request, response);
             return;
         }
@@ -125,7 +131,6 @@ public class AuthorizationFilter implements Filter {
             String servletName = request.getHttpServletMapping().getServletName();
             servletClass = Class.forName(servletName);
             AuthContext.set(authUser);
-            LOG.info("{}", (Object) authUser.getEmail());
 
             // class
             if (servletClass.isAnnotationPresent(RequiresRole.class)) {
@@ -153,10 +158,7 @@ public class AuthorizationFilter implements Filter {
             String servletMethod = resolveServletMethod(httpMethod);
 
             try {
-                java.lang.reflect.Method method = servletClass.getMethod(
-                        servletMethod,
-                        HttpServletRequest.class,
-                        HttpServletResponse.class);
+                java.lang.reflect.Method method = findServletMethod(servletClass, servletMethod);
 
                 if (method.isAnnotationPresent(RequiresRole.class)) {
                     RequiresRole annotation = method.getAnnotation(RequiresRole.class);
@@ -206,6 +208,21 @@ public class AuthorizationFilter implements Filter {
             AuthContext.clear();
         }
 
+    }
+
+    // Servlet handlers are usually protected, which Class.getMethod() cannot
+    // see; walk the hierarchy with getDeclaredMethod so method-level
+    // annotations are always enforced.
+    private java.lang.reflect.Method findServletMethod(Class<?> servletClass, String name)
+            throws NoSuchMethodException {
+        for (Class<?> c = servletClass; c != null && c != Object.class; c = c.getSuperclass()) {
+            try {
+                return c.getDeclaredMethod(name, HttpServletRequest.class, HttpServletResponse.class);
+            } catch (NoSuchMethodException ignored) {
+                // try the superclass
+            }
+        }
+        throw new NoSuchMethodException(name);
     }
 
     private boolean checkRole(AuthUser user, RequiresRole annotation) {

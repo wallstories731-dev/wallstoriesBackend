@@ -16,13 +16,13 @@ services:
     region: singapore        # closest to Neon ap-southeast-1 / India users
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    healthCheckPath: /arusuvai/health
+    healthCheckPath: /wallstories/health
     autoDeploy: true
     envVars:
       - key: PORT
         value: 8080
       - key: CONTEXT_PATH
-        value: /arusuvai
+        value: /wallstories
       # ─── Filled in via the Render dashboard ────────────────────
       - key: DB_URL
         sync: false          # jdbc:postgresql://...neon.tech/neondb?sslmode=require
@@ -30,6 +30,18 @@ services:
         sync: false
       - key: DB_PASSWORD
         sync: false
+      - key: DELHIVERY_API_TOKEN
+        sync: false
+      - key: DELHIVERY_BASE_URL
+        value: https://track.delhivery.com
+      - key: DELHIVERY_ORIGIN_PIN
+        value: "627006"
+      - key: DELHIVERY_PICKUP_NAME
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
       - key: RAZORPAY_KEY_ID
         sync: false
       - key: RAZORPAY_KEY_SECRET
@@ -69,12 +81,13 @@ services:
       - key: R2_BUCKET
         sync: false
       - key: R2_PUBLIC_BASE_URL
+        # Public r2.dev bucket URL or connected custom domain; never the S3 API endpoint.
         sync: false
       # Public origin of THIS service. After first deploy, copy the
       # generated onrender.com URL into the dashboard for both of
       # these (Render can't self-reference at create time).
       - key: APP_BASE_URL
-        sync: false          # e.g. https://arusuvai-backend.onrender.com/arusuvai
+        sync: false          # e.g. https://arusuvai-backend.onrender.com/wallstories
       - key: APP_HOME_URL
         value: https://www.arusuvaijunction.com
 
@@ -91,7 +104,7 @@ services:
       # Build-time: bakes the backend URL into the bundle so the
       # browser calls the deployed backend directly.
       - key: VITE_API_BASE
-        value: https://arusuvaijunctionbackend.onrender.com/arusuvai
+        value: https://arusuvaijunctionbackend.onrender.com/wallstories
     routes:
       # SPA fallback — every unknown path serves index.html so the
       # React router can take over.

@@ -3,6 +3,7 @@ package com.ecommerce.app.module.product;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.ecommerce.app.common.ApiResponse;
+import com.ecommerce.app.module.iam.security.AuthUser;
 import com.ecommerce.app.module.iam.security.RequiresRole;
 import com.ecommerce.app.util.SendResponseUtil;
 
@@ -82,6 +83,10 @@ public class ProductController extends HttpServlet {
                 }
 
                 Product product = service.getProductById(id);
+                // Drafts are visible to admins only.
+                if (product != null && !product.isActive() && !AuthUser.isAdminRequest(request)) {
+                    product = null;
+                }
                 if (product == null) {
                     SendResponseUtil.sendResponse(new ApiResponse(false, "product not found", null, 404), response);
                 } else {
@@ -107,9 +112,10 @@ public class ProductController extends HttpServlet {
 
             // ----- Search detection -----
             // We treat the request as a search whenever ANY of the search
-            // params is present (q, category, minPrice, maxPrice, inStock, sort).
+            // params is present (q, category, tag, minPrice, maxPrice, inStock, sort).
             String q = request.getParameter("q");
             String[] categoryParams = request.getParameterValues("category");
+            String[] tagParams = request.getParameterValues("tag");
             String minPriceParam = request.getParameter("minPrice");
             String maxPriceParam = request.getParameter("maxPrice");
             String inStockParam = request.getParameter("inStock");
@@ -118,21 +124,14 @@ public class ProductController extends HttpServlet {
             // Flatten repeated `?category=` AND comma-separated forms into a
             // single deduped, trimmed list. Empty input -> empty list ->
             // the service treats it as "no category filter".
-            List<String> categories = new ArrayList<>();
-            if (categoryParams != null) {
-                for (String raw : categoryParams) {
-                    if (raw == null) continue;
-                    for (String piece : raw.split(",")) {
-                        String t = piece.trim();
-                        if (!t.isEmpty() && !categories.contains(t)) {
-                            categories.add(t);
-                        }
-                    }
-                }
-            }
+            List<String> categories = flattenCsv(categoryParams);
+            // Same treatment for tags — users may pass `?tag=ironman&tag=marvel`
+            // or `?tag=ironman,marvel`. Normalisation to slugs happens inside
+            // TagRepository.findActiveProductIdsByTagSlugs.
+            List<String> tagSlugs = flattenCsv(tagParams);
 
             boolean isSearch =
-                    q != null || !categories.isEmpty() ||
+                    q != null || !categories.isEmpty() || !tagSlugs.isEmpty() ||
                     minPriceParam != null || maxPriceParam != null ||
                     inStockParam != null || sort != null;
 
@@ -163,9 +162,12 @@ public class ProductController extends HttpServlet {
                 // batch + review batch) and uses ILIKE which cannot use
                 // idx_products_category. The category-only path uses a
                 // single LATERAL-join query with exact equality + cache.
+                // Not taken when tags are present — the tag filter needs
+                // the generic search path.
                 boolean categoryOnly =
                         (q == null || q.trim().isEmpty()) &&
                         !categories.isEmpty() &&
+                        tagSlugs.isEmpty() &&
                         minPrice == null && maxPrice == null && !inStock;
                 if (categoryOnly) {
                     List<Product> products = service.getProductsByCategories(
@@ -176,14 +178,18 @@ public class ProductController extends HttpServlet {
                 }
 
                 List<Product> products = service.searchProducts(
-                        q, categories, minPrice, maxPrice, inStock, sort, limit, offset);
+                        q, categories, tagSlugs, minPrice, maxPrice, inStock, sort, limit, offset);
                 SendResponseUtil.sendResponse(
                         new ApiResponse(true, "search results", products, 200), response);
                 return;
             }
 
             // ----- Plain list -----
-            List<Product> products = service.getAllActiveProducts(limit, offset);
+            // ?expand=true attaches images + variants (batched) so the storefront
+            // needs no per-product detail request.
+            List<Product> products = "true".equalsIgnoreCase(request.getParameter("expand"))
+                    ? service.getAllActiveProductsExpanded(limit, offset)
+                    : service.getAllActiveProducts(limit, offset);
             SendResponseUtil.sendResponse(new ApiResponse(true, "products fetched", products, 200), response);
 
         } catch (Exception e) {
@@ -198,6 +204,25 @@ public class ProductController extends HttpServlet {
     private static int parseIntOrDefault(String raw, int fallback) {
         if (raw == null || raw.isEmpty()) return fallback;
         return Integer.parseInt(raw);
+    }
+
+    /**
+     * Flattens a multi-value query param (both {@code ?x=a&x=b} and
+     * {@code ?x=a,b} forms) into a de-duplicated, trimmed list. Used for
+     * both {@code category} and {@code tag} filters so they share the
+     * same input semantics.
+     */
+    private static List<String> flattenCsv(String[] raw) {
+        List<String> out = new ArrayList<>();
+        if (raw == null) return out;
+        for (String r : raw) {
+            if (r == null) continue;
+            for (String piece : r.split(",")) {
+                String t = piece.trim();
+                if (!t.isEmpty() && !out.contains(t)) out.add(t);
+            }
+        }
+        return out;
     }
 
     @RequiresRole("Admin")
