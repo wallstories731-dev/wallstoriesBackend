@@ -14,6 +14,14 @@ public class Review {
     private String userEmail;
     // Display-only, joined from products table when present (featured feed).
     private String productName;
+    // Optional wall-photo attached by the customer at submission time.
+    // photoUrl is the public URL served to the frontend; photoObjectKey is
+    // the backing storage key (R2/MinIO) used when the admin deletes the
+    // review and we need to also drop the file.
+    private String photoUrl;
+    private String photoObjectKey;
+    // Free-text city so testimonials can be credited without a users lookup.
+    private String city;
 
     public UUID getReviewId() { return reviewId; }
     public void setReviewId(UUID reviewId) { this.reviewId = reviewId; }
@@ -38,4 +46,14 @@ public class Review {
 
     public String getProductName() { return productName; }
     public void setProductName(String productName) { this.productName = productName; }
+
+    public String getPhotoUrl() { return photoUrl; }
+    public void setPhotoUrl(String photoUrl) { this.photoUrl = photoUrl; }
+
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public String getPhotoObjectKey() { return photoObjectKey; }
+    public void setPhotoObjectKey(String photoObjectKey) { this.photoObjectKey = photoObjectKey; }
+
+    public String getCity() { return city; }
+    public void setCity(String city) { this.city = city; }
 }

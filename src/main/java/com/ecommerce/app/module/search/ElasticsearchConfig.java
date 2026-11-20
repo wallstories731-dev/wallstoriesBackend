@@ -38,6 +38,9 @@ public final class ElasticsearchConfig {
     private ElasticsearchConfig() {}
 
     public static ElasticsearchClient client() {
+        if ("false".equalsIgnoreCase(com.ecommerce.app.module.iam.config.ENVConfig.get("ELASTICSEARCH_ENABLED"))) {
+            return null;
+        }
         if (CLIENT != null) return CLIENT;
         if (INIT_TRIED) return null; // already failed once; don't keep retrying on every request
         synchronized (ElasticsearchConfig.class) {
@@ -63,7 +66,7 @@ public final class ElasticsearchConfig {
     }
 
     private static String url() {
-        String raw = System.getenv("ELASTICSEARCH_URL");
+        String raw = com.ecommerce.app.module.iam.config.ENVConfig.get("ELASTICSEARCH_URL");
         return (raw == null || raw.isBlank()) ? "http://localhost:9200" : raw.trim();
     }
 
@@ -79,9 +82,9 @@ public final class ElasticsearchConfig {
                         .setConnectTimeout(2_000)
                         .setSocketTimeout(10_000));
 
-        String apiKey = System.getenv("ELASTICSEARCH_API_KEY");
-        String user = System.getenv("ELASTICSEARCH_USERNAME");
-        String pass = System.getenv("ELASTICSEARCH_PASSWORD");
+        String apiKey = com.ecommerce.app.module.iam.config.ENVConfig.get("ELASTICSEARCH_API_KEY");
+        String user = com.ecommerce.app.module.iam.config.ENVConfig.get("ELASTICSEARCH_USERNAME");
+        String pass = com.ecommerce.app.module.iam.config.ENVConfig.get("ELASTICSEARCH_PASSWORD");
         if (apiKey != null && !apiKey.isBlank()) {
             Header[] headers = { new BasicHeader("Authorization", "ApiKey " + apiKey) };
             builder.setDefaultHeaders(headers);

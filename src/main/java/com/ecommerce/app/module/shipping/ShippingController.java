@@ -51,7 +51,7 @@ public class ShippingController extends HttpServlet {
                         new ApiResponse(false, "Unknown action: " + action, null, 400), response);
             }
         } catch (Exception e) {
-            LOG.error("Shipping endpoint error: action={}", action, e);
+            LOG.error("Shipping endpoint error: action={}", com.ecommerce.app.util.LogSafe.clean(action), e);
             SendResponseUtil.sendResponse(
                     new ApiResponse(false, "Shipping service error: " + e.getMessage(), null, 500), response);
         }
@@ -88,6 +88,10 @@ public class ShippingController extends HttpServlet {
         int weightGrams = 300; // default
         if (weightStr != null && !weightStr.isBlank()) {
             weightGrams = Integer.parseInt(weightStr);
+        } else if (request.getParameter("quantity") != null) {
+            // Same per-unit weight the payment/order flows use for non-weight size labels.
+            int quantity = Math.max(1, Math.min(500, Integer.parseInt(request.getParameter("quantity"))));
+            weightGrams = ShippingCalculator.variantGrams("pcs") * quantity;
         }
         double subtotal = 0;
         if (subtotalStr != null && !subtotalStr.isBlank()) {

@@ -24,6 +24,15 @@ public class Order {
     // Delhivery shipping fields
     private String trackingNumber;   // AWB / waybill
     private String shippingProvider; // e.g. "DELHIVERY"
+
+    // Populated on the admin listing only.
+    private String customerName;
+    private String customerEmail;
+
+    public String getCustomerName() { return customerName; }
+    public void setCustomerName(String customerName) { this.customerName = customerName; }
+    public String getCustomerEmail() { return customerEmail; }
+    public void setCustomerEmail(String customerEmail) { this.customerEmail = customerEmail; }
     
     public UUID getOrderId() {
         return orderId;

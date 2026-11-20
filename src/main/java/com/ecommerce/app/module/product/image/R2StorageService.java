@@ -2,7 +2,12 @@ package com.ecommerce.app.module.product.image;
 
 import java.io.InputStream;
 import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Locale;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,27 +35,25 @@ import software.amazon.awssdk.services.s3.model.PutObjectRequest;
  *   R2_ACCESS_KEY_ID         - API token access key
  *   R2_SECRET_ACCESS_KEY     - API token secret
  *   R2_BUCKET                - bucket name
- *   R2_PUBLIC_BASE_URL       - optional public URL prefix (r2.dev subdomain or
+ *   R2_PUBLIC_BASE_URL       - required public URL prefix (r2.dev subdomain or
  *                              custom domain). When set, getFileUrl() returns
  *                              "<R2_PUBLIC_BASE_URL>/<objectKey>" so the
  *                              browser can fetch the image directly.
- *                              When unset, returns the private S3-style URL
- *                              (not browser-fetchable without signed URLs).
+ *                              Private S3 API endpoints are rejected: they
+ *                              cannot serve unsigned storefront image requests.
  */
 public class R2StorageService implements StorageService {
     private static final Logger LOG = LoggerFactory.getLogger(R2StorageService.class);
 
     private final S3Client s3;
     private final String bucket;
-    private final String publicBaseUrl; // may be null
-    private final String endpoint;
+    private final String publicBaseUrl;
 
     public R2StorageService(String accountId, String accessKey, String secretKey,
                             String bucket, String publicBaseUrl) {
         this.bucket = bucket;
-        this.publicBaseUrl = (publicBaseUrl == null || publicBaseUrl.isBlank())
-                ? null : stripTrailingSlash(publicBaseUrl);
-        this.endpoint = "https://" + accountId + ".r2.cloudflarestorage.com";
+        this.publicBaseUrl = validatePublicBaseUrl(publicBaseUrl);
+        String endpoint = "https://" + accountId + ".r2.cloudflarestorage.com";
 
         this.s3 = S3Client.builder()
                 .endpointOverride(URI.create(endpoint))
@@ -61,6 +64,12 @@ public class R2StorageService implements StorageService {
                         .pathStyleAccessEnabled(true)
                         .build())
                 .build();
+    }
+
+    R2StorageService(S3Client s3, String bucket, String publicBaseUrl) {
+        this.s3 = s3;
+        this.bucket = bucket;
+        this.publicBaseUrl = validatePublicBaseUrl(publicBaseUrl);
     }
 
     @Override
@@ -96,15 +105,31 @@ public class R2StorageService implements StorageService {
 
     @Override
     public String getFileUrl(String objectKey) {
-        if (publicBaseUrl != null) {
-            return publicBaseUrl + "/" + objectKey;
-        }
-        // Fallback: private API URL. Not directly browser-accessible without
-        // a signed URL, but unique and stable.
-        return endpoint + "/" + bucket + "/" + objectKey;
+        if (objectKey == null || objectKey.isBlank())
+            throw new IllegalArgumentException("R2 object key is required");
+        String path = Arrays.stream(objectKey.split("/", -1))
+                .map(segment -> URLEncoder.encode(segment, StandardCharsets.UTF_8).replace("+", "%20"))
+                .collect(Collectors.joining("/"));
+        return publicBaseUrl + "/" + path;
     }
 
-    private static String stripTrailingSlash(String s) {
-        return s.endsWith("/") ? s.substring(0, s.length() - 1) : s;
+    private static String validatePublicBaseUrl(String value) {
+        String message = "R2_PUBLIC_BASE_URL must be a public HTTPS r2.dev URL or connected custom domain, "
+                + "not the private r2.cloudflarestorage.com API endpoint";
+        if (value == null || value.isBlank()) throw new IllegalArgumentException(message);
+        URI uri;
+        try {
+            uri = URI.create(value.trim());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException(message, e);
+        }
+        String host = uri.getHost();
+        if (!"https".equalsIgnoreCase(uri.getScheme()) || host == null
+                || uri.getRawUserInfo() != null || uri.getRawQuery() != null || uri.getRawFragment() != null
+                || host.equalsIgnoreCase("r2.cloudflarestorage.com")
+                || host.toLowerCase(Locale.ROOT).endsWith(".r2.cloudflarestorage.com")) {
+            throw new IllegalArgumentException(message);
+        }
+        return uri.toString().replaceAll("/+$", "");
     }
 }

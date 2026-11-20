@@ -42,7 +42,9 @@ public class UserService {
             // carry the OAuth sentinel, not a real bcrypt hash.
             String hash = user.getPasswordHash();
             boolean hasPw = hash != null && !hash.isBlank()
-                    && !UserRepository.OAUTH_PASSWORD_SENTINEL.equals(hash);
+                    && !java.security.MessageDigest.isEqual(
+                            UserRepository.OAUTH_PASSWORD_SENTINEL.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                            hash.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             user.setHasPassword(hasPw);
             user.setPasswordHash(null);
         }

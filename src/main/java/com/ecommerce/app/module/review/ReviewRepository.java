@@ -19,14 +19,21 @@ public class ReviewRepository {
      * persisted row.
      */
     public Review upsert(Review review) {
+        // ON CONFLICT updates everything so a resubmission can also swap the
+        // photo / city. photo_* columns default to NULL on first write.
         String sql = """
-                INSERT INTO reviews (review_id, user_id, product_id, rating, comment)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO reviews (review_id, user_id, product_id, rating, comment,
+                                     photo_url, photo_object_key, city)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (user_id, product_id)
-                DO UPDATE SET rating = EXCLUDED.rating,
-                              comment = EXCLUDED.comment,
-                              created_at = CURRENT_TIMESTAMP
-                RETURNING review_id, user_id, product_id, rating, comment, created_at
+                DO UPDATE SET rating           = EXCLUDED.rating,
+                              comment          = EXCLUDED.comment,
+                              photo_url        = COALESCE(EXCLUDED.photo_url, reviews.photo_url),
+                              photo_object_key = COALESCE(EXCLUDED.photo_object_key, reviews.photo_object_key),
+                              city             = COALESCE(EXCLUDED.city, reviews.city),
+                              created_at       = CURRENT_TIMESTAMP
+                RETURNING review_id, user_id, product_id, rating, comment, created_at,
+                          photo_url, photo_object_key, city
                 """;
 
         try (Connection c = DBConfig.getConnection();
@@ -37,6 +44,9 @@ public class ReviewRepository {
             ps.setObject(3, review.getProductId());
             ps.setInt(4, review.getRating());
             ps.setString(5, review.getComment());
+            ps.setString(6, review.getPhotoUrl());
+            ps.setString(7, review.getPhotoObjectKey());
+            ps.setString(8, review.getCity());
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
                     return mapRow(rs);
@@ -52,6 +62,7 @@ public class ReviewRepository {
     public List<Review> findByProductId(UUID productId, int limit, int offset) {
         String sql = """
                 SELECT r.review_id, r.user_id, r.product_id, r.rating, r.comment, r.created_at,
+                       r.photo_url, r.photo_object_key, r.city,
                        u.email AS user_email
                 FROM reviews r
                 LEFT JOIN users u ON u.user_id = r.user_id
@@ -79,7 +90,8 @@ public class ReviewRepository {
     }
 
     public Review findById(UUID reviewId) {
-        String sql = "SELECT review_id, user_id, product_id, rating, comment, created_at FROM reviews WHERE review_id = ?";
+        String sql = "SELECT review_id, user_id, product_id, rating, comment, created_at, "
+                   + "photo_url, photo_object_key, city FROM reviews WHERE review_id = ?";
         try (Connection c = DBConfig.getConnection();
              PreparedStatement ps = c.prepareStatement(sql)) {
             ps.setObject(1, reviewId);
@@ -182,6 +194,11 @@ public class ReviewRepository {
         r.setRating(rs.getInt("rating"));
         r.setComment(rs.getString("comment"));
         r.setCreatedAt(rs.getTimestamp("created_at"));
+        // photo_* and city are nullable; mapRow tolerates callers that
+        // didn't SELECT them by swallowing SQLException("column not found").
+        try { r.setPhotoUrl(rs.getString("photo_url")); }                 catch (SQLException ignored) {}
+        try { r.setPhotoObjectKey(rs.getString("photo_object_key")); }    catch (SQLException ignored) {}
+        try { r.setCity(rs.getString("city")); }                          catch (SQLException ignored) {}
         return r;
     }
 
@@ -200,6 +217,7 @@ public class ReviewRepository {
         if (limit <= 0 || limit > 50) limit = 12;
         String sql = """
                 SELECT r.review_id, r.user_id, r.product_id, r.rating, r.comment, r.created_at,
+                       r.photo_url, r.photo_object_key, r.city,
                        u.email AS user_email,
                        p.name  AS product_name
                 FROM reviews r
@@ -225,6 +243,87 @@ public class ReviewRepository {
             }
         } catch (SQLException e) {
             LOG.error("sql exception at findFeatured reviews ", e);
+        }
+        return out;
+    }
+
+    /** Admin moderation feed: every review, newest first. */
+    public List<Review> findAll(int limit, int offset) {
+        String sql = """
+                SELECT r.review_id, r.user_id, r.product_id, r.rating, r.comment, r.created_at,
+                       r.photo_url, r.photo_object_key, r.city,
+                       u.email AS user_email,
+                       p.name  AS product_name
+                FROM reviews r
+                LEFT JOIN users    u ON u.user_id    = r.user_id
+                LEFT JOIN products p ON p.product_id = r.product_id
+                ORDER BY r.created_at DESC
+                LIMIT ? OFFSET ?
+                """;
+        List<Review> out = new ArrayList<>();
+        try (Connection c = DBConfig.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setInt(1, limit);
+            ps.setInt(2, offset);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Review r = mapRow(rs);
+                    r.setUserEmail(rs.getString("user_email"));
+                    r.setProductName(rs.getString("product_name"));
+                    out.add(r);
+                }
+            }
+        } catch (SQLException e) {
+            LOG.error("sql exception at findAll reviews ", e);
+        }
+        return out;
+    }
+
+    public boolean deleteAny(UUID reviewId) {
+        try (Connection c = DBConfig.getConnection();
+             PreparedStatement ps = c.prepareStatement("DELETE FROM reviews WHERE review_id = ?")) {
+            ps.setObject(1, reviewId);
+            return ps.executeUpdate() > 0;
+        } catch (SQLException e) {
+            LOG.error("sql exception at deleteAny review ", e);
+        }
+        return false;
+    }
+
+    /**
+     * Reviews that carry a wall photo — powers the storefront
+     * #photo-reviews gallery. Highest-rated, newest first so the strip
+     * always leads with a 5★ testimonial.
+     */
+    public List<Review> findWithPhoto(int limit) {
+        if (limit <= 0 || limit > 60) limit = 24;
+        String sql = """
+                SELECT r.review_id, r.user_id, r.product_id, r.rating, r.comment, r.created_at,
+                       r.photo_url, r.photo_object_key, r.city,
+                       u.email AS user_email,
+                       p.name  AS product_name
+                FROM reviews r
+                LEFT JOIN users    u ON u.user_id    = r.user_id
+                LEFT JOIN products p ON p.product_id = r.product_id
+                WHERE r.photo_url IS NOT NULL
+                  AND length(trim(r.photo_url)) > 0
+                ORDER BY r.rating DESC, r.created_at DESC
+                LIMIT ?
+                """;
+        List<Review> out = new ArrayList<>();
+        try (Connection c = DBConfig.getConnection();
+             PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setInt(1, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Review r = mapRow(rs);
+                    r.setUserEmail(rs.getString("user_email"));
+                    r.setProductName(rs.getString("product_name"));
+                    out.add(r);
+                }
+            }
+        } catch (SQLException e) {
+            LOG.error("sql exception at findWithPhoto reviews ", e);
         }
         return out;
     }

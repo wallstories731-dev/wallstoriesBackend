@@ -16,16 +16,16 @@ services:
       - .env
     environment:
       PORT: 8080
-      CONTEXT_PATH: /arusuvai
+      CONTEXT_PATH: /wallstories
       # When behind the nginx container the public URL is the frontend
       # service. Override per-deployment.
-      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8080/arusuvai}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:8080/wallstories}
       APP_HOME_URL: ${APP_HOME_URL:-https://www.arusuvaijunction.com}
     ports:
       - "8080:8080"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/arusuvai/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/wallstories/health"]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -37,8 +37,8 @@ services:
       dockerfile: Dockerfile
       args:
         # Same-origin: browser hits the nginx container, which proxies
-        # /arusuvai/* into the backend container.
-        VITE_API_BASE: /arusuvai
+        # /wallstories/* into the backend container.
+        VITE_API_BASE: /wallstories
     image: arusuvai-frontend:local
     container_name: arusuvai-frontend
     depends_on:

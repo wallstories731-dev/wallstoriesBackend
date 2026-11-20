@@ -21,11 +21,11 @@ USER app
 
 # Render injects $PORT at runtime; the app reads it via System.getenv("PORT").
 ENV PORT=8080 \
-    CONTEXT_PATH=/arusuvai \
+    CONTEXT_PATH=/wallstories \
     JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75 -XX:+UseG1GC"
 EXPOSE 8080
 
-# Render's health check probes / by default — point it at /arusuvai/health
+# Render's health check probes / by default — point it at /wallstories/health
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD wget -qO- http://127.0.0.1:${PORT}${CONTEXT_PATH}/health || exit 1
 

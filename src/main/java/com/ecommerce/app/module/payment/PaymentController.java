@@ -55,7 +55,7 @@ public class PaymentController extends HttpServlet {
                             new ApiResponse(false, "unknown action", null, 400), response);
             }
         } catch (Exception e) {
-            LOG.error("payment controller error action={}", action, e);
+            LOG.error("payment controller error action={}", com.ecommerce.app.util.LogSafe.clean(action), e);
             SendResponseUtil.sendResponse(
                     new ApiResponse(false, "payment failed", null, 500), response);
         }

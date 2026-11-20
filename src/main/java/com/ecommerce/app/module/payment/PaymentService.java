@@ -12,6 +12,7 @@ import com.ecommerce.app.module.mail.MailService;
 import com.ecommerce.app.module.mail.MailTemplates;
 import com.ecommerce.app.module.order.*;
 import com.ecommerce.app.module.product.*;
+import com.ecommerce.app.module.shipping.ShippingService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -72,6 +73,7 @@ public class PaymentService {
     private final EmailVerificationRepository emailVerificationRepository = new EmailVerificationRepository();
     private final PaymentTransactionRepository paymentTxnRepository = new PaymentTransactionRepository();
     private final RazorpayClient razorpay = RazorpayClient.get();
+    private final ShippingService shippingService = new ShippingService();
 
     /** What the frontend needs to open the Razorpay popup. */
     public static final class InitiationResponse {
@@ -130,8 +132,16 @@ public class PaymentService {
 
             double total = 0.0;
             int totalGrams = 0;
+            java.util.Set<UUID> productIds = new java.util.HashSet<>();
+            java.util.Set<UUID> variantIds = new java.util.HashSet<>();
             for (CartItem ci : cartItems) {
-                Product product = productRepository.findById(ci.getProductId());
+                productIds.add(ci.getProductId());
+                if (ci.getVariantId() != null) variantIds.add(ci.getVariantId());
+            }
+            java.util.Map<UUID, Product> productsById = productRepository.findByIds(productIds);
+            java.util.Map<UUID, ProductVariant> variantsById = productVariantRepository.findByIds(variantIds);
+            for (CartItem ci : cartItems) {
+                Product product = productsById.get(ci.getProductId());
                 if (product == null || product.getId() == null || !product.isActive()) {
                     connection.rollback();
                     throw new RuntimeException("product no longer available");
@@ -141,7 +151,7 @@ public class PaymentService {
                 int availableStock = product.getStockQuantity();
                 String variantLabel = null;
                 if (ci.getVariantId() != null) {
-                    variant = productVariantRepository.findById(ci.getVariantId());
+                    variant = variantsById.get(ci.getVariantId());
                     if (variant == null || !variant.isActive()
                             || !variant.getProductId().equals(product.getId())) {
                         connection.rollback();
@@ -176,7 +186,8 @@ public class PaymentService {
             // Compute shipping server-side from the authoritative rate table;
             // weight is derived from each variant label. Ignore any
             // client-provided shippingFee value.
-            double computedShipping = ShippingCalculator.calculateByGrams(shippingAddress, totalGrams, total);
+            double computedShipping = shippingService.calculateRate(
+                    shippingAddress, ShippingCalculator.extractPincode(shippingAddress), totalGrams, total);
             orderRepository.updateShippingFee(connection, computedShipping, order.getOrderId());
             if (computedShipping > 0) total += computedShipping;
 
@@ -259,7 +270,8 @@ public class PaymentService {
             // client-provided shippingFee value.
             double merchandiseTotal = linePrice * quantity;
             int totalGrams = ShippingCalculator.variantGrams(variantLabel) * quantity;
-            double computedShipping = ShippingCalculator.calculateByGrams(shippingAddress, totalGrams, merchandiseTotal);
+            double computedShipping = shippingService.calculateRate(
+                    shippingAddress, ShippingCalculator.extractPincode(shippingAddress), totalGrams, merchandiseTotal);
 
             Order order = new Order();
             order.setUserId(userId);
@@ -382,10 +394,18 @@ public class PaymentService {
             // Approach B: recheck stock now that money has been captured. If
             // anything is out of stock, the customer needs a refund.
             List<OrderItem> items = itemRepository.findByOrderId(orderId);
+            java.util.Set<UUID> recheckProductIds = new java.util.HashSet<>();
+            java.util.Set<UUID> recheckVariantIds = new java.util.HashSet<>();
+            for (OrderItem item : items) {
+                if (item.getVariantId() != null) recheckVariantIds.add(item.getVariantId());
+                else recheckProductIds.add(item.getProductId());
+            }
+            java.util.Map<UUID, Product> recheckProducts = productRepository.findByIds(recheckProductIds);
+            java.util.Map<UUID, ProductVariant> recheckVariants = productVariantRepository.findByIds(recheckVariantIds);
             for (OrderItem item : items) {
                 int avail;
                 if (item.getVariantId() != null) {
-                    ProductVariant v = productVariantRepository.findById(item.getVariantId());
+                    ProductVariant v = recheckVariants.get(item.getVariantId());
                     if (v == null || !v.isActive()) {
                         markFailedAndRollback(connection, orderId, txn, "variant unavailable post-payment");
                         throw new RuntimeException(
@@ -393,7 +413,7 @@ public class PaymentService {
                     }
                     avail = v.getStockQuantity();
                 } else {
-                    Product p = productRepository.findById(item.getProductId());
+                    Product p = recheckProducts.get(item.getProductId());
                     if (p == null || !p.isActive()) {
                         markFailedAndRollback(connection, orderId, txn, "product unavailable post-payment");
                         throw new RuntimeException(
@@ -582,6 +602,9 @@ public class PaymentService {
         }
         if (phone == null || phone.isBlank()) {
             throw new RuntimeException("phone is required");
+        }
+        if (ShippingCalculator.extractPincode(shippingAddress) == null) {
+            throw new RuntimeException("a 6-digit delivery pincode is required");
         }
     }
 

@@ -44,6 +44,16 @@ public class Product{
     // the product ships in a single size; the frontend then falls back
     // to product.price + product.stockQuantity.
     private List<ProductVariant> variants;
+    // Free-form JSON (string) for storefront metadata the schema has no column for
+    // (catalogue code, badge, tags, featured flag, MRPs...). Opaque to the backend.
+    private String attributes;
+    // First-class tags attached via the product_tags join table. Populated
+    // on detail + list-view reads so clients can render chips without a
+    // separate /api/tag?productId= round-trip. Writes to this field via
+    // the product endpoints are IGNORED — tags are managed exclusively
+    // through /api/tag (set replace / attach / detach) so a stray product
+    // PUT cannot accidentally wipe them.
+    private List<Tag> productTags;
     public UUID getId() {
         return id;
     }
@@ -128,6 +138,42 @@ public class Product{
 
     public List<Review> getReviews() { return reviews; }
     public void setReviews(List<Review> reviews) { this.reviews = reviews; }
+
+    public String getAttributes() { return attributes; }
+
+    /**
+     * Tag slugs attached to this product, exposed as a convenience read-only
+     * field. Prefers the first-class {@code product_tags} join table (hydrated
+     * by {@link ProductService}); falls back to the legacy JSON-packed list in
+     * {@code attributes.tags} for records written before the join table existed.
+     */
+    @com.fasterxml.jackson.annotation.JsonProperty(value = "tags", access = com.fasterxml.jackson.annotation.JsonProperty.Access.READ_ONLY)
+    public List<String> getTags() {
+        List<String> out = new ArrayList<>();
+        if (productTags != null && !productTags.isEmpty()) {
+            for (Tag t : productTags) {
+                String slug = t.getSlug();
+                if (slug != null && !slug.isBlank()) out.add(slug);
+            }
+            if (!out.isEmpty()) return out;
+        }
+        if (attributes == null || attributes.isBlank()) return out;
+        try {
+            com.fasterxml.jackson.databind.JsonNode t = new com.fasterxml.jackson.databind.ObjectMapper().readTree(attributes).get("tags");
+            if (t != null && t.isArray()) t.forEach(n -> { if (n.isTextual() && !n.asText().isBlank()) out.add(n.asText()); });
+        } catch (Exception ignored) { }
+        return out;
+    }
+    public void setAttributes(String attributes) { this.attributes = attributes; }
+
+    /**
+     * Full tag objects (id, name, slug, description). Serialised on reads;
+     * ignored on writes so product PUTs cannot clobber the tag set — manage
+     * tags through {@code /api/tag} instead.
+     */
+    @com.fasterxml.jackson.annotation.JsonProperty(value = "productTags", access = com.fasterxml.jackson.annotation.JsonProperty.Access.READ_ONLY)
+    public List<Tag> getProductTags() { return productTags; }
+    public void setProductTags(List<Tag> productTags) { this.productTags = productTags; }
 
     public List<ProductVariant> getVariants() { return variants; }
     public void setVariants(List<ProductVariant> variants) { this.variants = variants; }

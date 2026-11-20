@@ -45,7 +45,8 @@ public class AdminController extends HttpServlet {
             if(type.contains("order"))    {
                 SendResponseUtil.sendResponse(new ApiResponse(true, "get all orders of the platform", getAllOrders(limit, offset), 200), response);
             }else if(type.contains("product")){
-                  SendResponseUtil.sendResponse(new ApiResponse(true, "get all products of the platform", getAllProducts(limit, offset), 200), response);
+                  boolean expand = "true".equalsIgnoreCase(request.getParameter("expand"));
+                  SendResponseUtil.sendResponse(new ApiResponse(true, "get all products of the platform", expand ? productService.getAllProductsExpanded(limit, offset) : getAllProducts(limit, offset), 200), response);
             }else {
                   SendResponseUtil.sendResponse(new ApiResponse(false, "unknown admin resource (use ?type=order or ?type=product)", null, 400), response);
             }

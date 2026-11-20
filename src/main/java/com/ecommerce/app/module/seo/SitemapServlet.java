@@ -23,7 +23,7 @@ import jakarta.servlet.http.HttpServletResponse;
 /**
  * Dynamic product sitemap.
  *
- * GET /arusuvai/sitemap-products.xml
+ * GET /wallstories/sitemap-products.xml
  *   -> application/xml urlset listing every published product URL.
  *
  * The frontend's static /sitemap.xml covers Home, About, Contact, etc.

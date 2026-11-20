@@ -72,12 +72,16 @@ public class ProductImageController extends HttpServlet {
                     break;
                 }
             }
-            if (imagePart == null) {
+            // Alternative to a file: register an already-hosted https image by URL.
+            String externalUrl = request.getParameter("imageUrl");
+            if (imagePart == null && (externalUrl == null || externalUrl.isBlank())) {
                 SendResponseUtil.sendResponse(
-                        new ApiResponse(false, "image file is required", null, 400), response);
+                        new ApiResponse(false, "image file or imageUrl is required", null, 400), response);
                 return;
             }
-            ProductImage saved = service.addImage(productId, imagePart);
+            ProductImage saved = imagePart != null
+                    ? service.addImage(productId, imagePart)
+                    : service.addExternalImage(productId, externalUrl.trim());
             if (saved == null) {
                 SendResponseUtil.sendResponse(
                         new ApiResponse(false, "could not upload image", null, 500), response);
